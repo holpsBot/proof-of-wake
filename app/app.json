@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "Proof of Wake",
+    "slug": "proof-of-wake",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "proof-of-wake",
+    "web": {
+      "output": "static"
+    },
+    "android": {
+      "package": "com.holps.proofofwake"
+    },
+    "ios": {
+      "bundleIdentifier": "com.holps.proofofwake"
+    }
+  }
+}
