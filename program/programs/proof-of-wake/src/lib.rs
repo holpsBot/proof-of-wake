@@ -10,6 +10,9 @@ const DEV_WALLET: Pubkey = solana_program::pubkey!("HUvXWZcteeatc6LRCn35yCH3kxet
 const COMMISSION_BPS: u64 = 690;
 const BPS_DENOMINATOR: u64 = 10000;
 
+// Alarm window: ±1 hour (3600 seconds) around the target wake time
+const ALARM_WINDOW_SECONDS: i64 = 3600;
+
 #[program]
 pub mod proof_of_wake {
     use super::*;
@@ -43,9 +46,16 @@ pub mod proof_of_wake {
         Ok(())
     }
 
-    pub fn start_challenge(ctx: Context<StartChallenge>, alarm_hour: u8, alarm_minute: u8) -> Result<()> {
+    pub fn start_challenge(
+        ctx: Context<StartChallenge>, 
+        alarm_hour: u8, 
+        alarm_minute: u8,
+        timezone_offset_seconds: i32,
+    ) -> Result<()> {
         require!(alarm_hour < 24, ErrorCode::InvalidAlarmTime);
         require!(alarm_minute < 60, ErrorCode::InvalidAlarmTime);
+        // Timezone offset should be reasonable (-12h to +14h in seconds)
+        require!(timezone_offset_seconds >= -43200 && timezone_offset_seconds <= 50400, ErrorCode::InvalidTimezone);
 
         let challenge = &mut ctx.accounts.challenge;
         let clock = Clock::get()?;
@@ -58,6 +68,7 @@ pub mod proof_of_wake {
         challenge.stake_amount = 100_000_000; // 0.1 SOL in lamports
         challenge.alarm_hour = alarm_hour;
         challenge.alarm_minute = alarm_minute;
+        challenge.timezone_offset = timezone_offset_seconds;
         challenge.bump = ctx.bumps.challenge;
 
         // Transfer 0.1 SOL from user to challenge PDA vault
@@ -89,6 +100,27 @@ pub mod proof_of_wake {
             let elapsed = clock.unix_timestamp - challenge.last_wake_ts;
             require!(elapsed > 72000, ErrorCode::TooEarly); // 20 hours
         }
+
+        // ===== ALARM WINDOW VALIDATION =====
+        // Convert current UTC time to user's local time
+        let local_timestamp = clock.unix_timestamp + (challenge.timezone_offset as i64);
+        
+        // Calculate seconds since midnight in local time
+        // 86400 = seconds per day
+        let seconds_since_midnight = local_timestamp.rem_euclid(86400);
+        
+        // Calculate target wake time in seconds since midnight
+        let target_seconds = (challenge.alarm_hour as i64) * 3600 + (challenge.alarm_minute as i64) * 60;
+        
+        // Calculate difference, handling wrap-around at midnight
+        let mut diff = (seconds_since_midnight - target_seconds).abs();
+        if diff > 43200 {
+            // Handle wrap-around (e.g., 23:00 vs 01:00 should be 2 hours, not 22)
+            diff = 86400 - diff;
+        }
+        
+        require!(diff <= ALARM_WINDOW_SECONDS, ErrorCode::OutsideAlarmWindow);
+        // ===== END ALARM VALIDATION =====
 
         challenge.last_wake_ts = clock.unix_timestamp;
         challenge.streak = challenge.streak.checked_add(1).unwrap();
@@ -204,7 +236,7 @@ pub struct StartChallenge<'info> {
     #[account(
         init,
         payer = authority,
-        space = 8 + 32 + 8 + 8 + 1 + 1 + 8 + 1 + 1 + 1,
+        space = 8 + 32 + 8 + 8 + 1 + 1 + 8 + 1 + 1 + 4 + 1, // Added 4 bytes for timezone_offset (i32)
         seeds = [b"challenge", authority.key().as_ref()],
         bump
     )]
@@ -277,6 +309,7 @@ pub struct Challenge {
     pub stake_amount: u64,
     pub alarm_hour: u8,
     pub alarm_minute: u8,
+    pub timezone_offset: i32,  // User's timezone offset in seconds from UTC
     pub bump: u8,
 }
 
@@ -294,4 +327,8 @@ pub enum ErrorCode {
     InvalidDevWallet,
     #[msg("Challenge is still active.")]
     ChallengeStillActive,
+    #[msg("Current time is outside the alarm window (±1 hour).")]
+    OutsideAlarmWindow,
+    #[msg("Invalid timezone offset.")]
+    InvalidTimezone,
 }
