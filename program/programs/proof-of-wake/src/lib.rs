@@ -13,6 +13,10 @@ const BPS_DENOMINATOR: u64 = 10000;
 // Alarm window: ±1 hour (3600 seconds) around the target wake time
 const ALARM_WINDOW_SECONDS: i64 = 3600;
 
+// Stake amount limits (in lamports)
+const MIN_STAKE_LAMPORTS: u64 = 10_000_000;   // 0.01 SOL minimum
+const MAX_STAKE_LAMPORTS: u64 = 1_000_000_000; // 1 SOL maximum
+
 #[program]
 pub mod proof_of_wake {
     use super::*;
@@ -51,11 +55,15 @@ pub mod proof_of_wake {
         alarm_hour: u8, 
         alarm_minute: u8,
         timezone_offset_seconds: i32,
+        stake_amount: u64,
     ) -> Result<()> {
         require!(alarm_hour < 24, ErrorCode::InvalidAlarmTime);
         require!(alarm_minute < 60, ErrorCode::InvalidAlarmTime);
         // Timezone offset should be reasonable (-12h to +14h in seconds)
         require!(timezone_offset_seconds >= -43200 && timezone_offset_seconds <= 50400, ErrorCode::InvalidTimezone);
+        // Stake must be within bounds
+        require!(stake_amount >= MIN_STAKE_LAMPORTS, ErrorCode::StakeTooLow);
+        require!(stake_amount <= MAX_STAKE_LAMPORTS, ErrorCode::StakeTooHigh);
 
         let challenge = &mut ctx.accounts.challenge;
         let clock = Clock::get()?;
@@ -65,7 +73,7 @@ pub mod proof_of_wake {
         challenge.last_wake_ts = 0;
         challenge.streak = 0;
         challenge.is_active = true;
-        challenge.stake_amount = 100_000_000; // 0.1 SOL in lamports
+        challenge.stake_amount = stake_amount;
         challenge.alarm_hour = alarm_hour;
         challenge.alarm_minute = alarm_minute;
         challenge.timezone_offset = timezone_offset_seconds;
@@ -331,4 +339,8 @@ pub enum ErrorCode {
     OutsideAlarmWindow,
     #[msg("Invalid timezone offset.")]
     InvalidTimezone,
+    #[msg("Stake amount is below minimum (0.01 SOL).")]
+    StakeTooLow,
+    #[msg("Stake amount is above maximum (1 SOL).")]
+    StakeTooHigh,
 }
