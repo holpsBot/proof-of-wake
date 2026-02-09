@@ -160,6 +160,10 @@ pub mod proof_of_wake {
             if actual_bonus > 0 {
                 **ctx.accounts.treasury.to_account_info().try_borrow_mut_lamports()? -= actual_bonus;
                 **ctx.accounts.authority.to_account_info().try_borrow_mut_lamports()? += actual_bonus;
+                
+                // Update treasury accounting
+                let treasury = &mut ctx.accounts.treasury;
+                treasury.total_funded = treasury.total_funded.saturating_sub(actual_bonus);
             }
         }
 
