@@ -3,6 +3,16 @@ use anchor_lang::solana_program::system_instruction;
 
 declare_id!("2KhoiLTRRzVn4EoEcbHgdtoU4PNJrTxydTb2Mpm1VJbD");
 
+// Hardcoded dev wallet for slash commissions
+const DEV_WALLET: Pubkey = solana_program::pubkey!("HUvXWZcteeatc6LRCn35yCH3kxetq3JcEcD923avQ37Y");
+
+// 6.9% as basis points (690 / 10000)
+const COMMISSION_BPS: u64 = 690;
+const BPS_DENOMINATOR: u64 = 10000;
+
+// Alarm window: ±1 hour (3600 seconds) around the target wake time
+const ALARM_WINDOW_SECONDS: i64 = 3600;
+
 #[program]
 pub mod proof_of_wake {
     use super::*;
@@ -11,10 +21,42 @@ pub mod proof_of_wake {
         let treasury = &mut ctx.accounts.treasury;
         treasury.authority = ctx.accounts.authority.key();
         treasury.total_funded = 0;
+        treasury.bump = ctx.bumps.treasury;
         Ok(())
     }
 
-    pub fn start_challenge(ctx: Context<StartChallenge>, alarm_hour: u8, alarm_minute: u8) -> Result<()> {
+    pub fn fund_treasury(ctx: Context<FundTreasury>, amount: u64) -> Result<()> {
+        let treasury = &mut ctx.accounts.treasury;
+        
+        let ix = system_instruction::transfer(
+            &ctx.accounts.funder.key(),
+            &treasury.key(),
+            amount,
+        );
+        anchor_lang::solana_program::program::invoke(
+            &ix,
+            &[
+                ctx.accounts.funder.to_account_info(),
+                treasury.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+        )?;
+        
+        treasury.total_funded = treasury.total_funded.checked_add(amount).unwrap();
+        Ok(())
+    }
+
+    pub fn start_challenge(
+        ctx: Context<StartChallenge>, 
+        alarm_hour: u8, 
+        alarm_minute: u8,
+        timezone_offset_seconds: i32,
+    ) -> Result<()> {
+        require!(alarm_hour < 24, ErrorCode::InvalidAlarmTime);
+        require!(alarm_minute < 60, ErrorCode::InvalidAlarmTime);
+        // Timezone offset should be reasonable (-12h to +14h in seconds)
+        require!(timezone_offset_seconds >= -43200 && timezone_offset_seconds <= 50400, ErrorCode::InvalidTimezone);
+
         let challenge = &mut ctx.accounts.challenge;
         let clock = Clock::get()?;
 
@@ -26,8 +68,10 @@ pub mod proof_of_wake {
         challenge.stake_amount = 100_000_000; // 0.1 SOL in lamports
         challenge.alarm_hour = alarm_hour;
         challenge.alarm_minute = alarm_minute;
+        challenge.timezone_offset = timezone_offset_seconds;
+        challenge.bump = ctx.bumps.challenge;
 
-        // Transfer 0.1 SOL from user to program vault (the challenge PDA itself)
+        // Transfer 0.1 SOL from user to challenge PDA vault
         let ix = system_instruction::transfer(
             &ctx.accounts.authority.key(),
             &challenge.key(),
@@ -37,7 +81,7 @@ pub mod proof_of_wake {
             &ix,
             &[
                 ctx.accounts.authority.to_account_info(),
-                ctx.accounts.challenge.to_account_info(),
+                challenge.to_account_info(),
                 ctx.accounts.system_program.to_account_info(),
             ],
         )?;
@@ -49,49 +93,66 @@ pub mod proof_of_wake {
         let challenge = &mut ctx.accounts.challenge;
         let clock = Clock::get()?;
 
-        // Logic for window check would go here.
-        // For MVP, we'll just check if at least 20 hours have passed since last wake
-        // to prevent double-calling in one morning, and that it's active.
         require!(challenge.is_active, ErrorCode::ChallengeInactive);
         
+        // Ensure at least 20 hours since last wake to prevent gaming
         if challenge.last_wake_ts != 0 {
             let elapsed = clock.unix_timestamp - challenge.last_wake_ts;
             require!(elapsed > 72000, ErrorCode::TooEarly); // 20 hours
         }
 
+        // ===== ALARM WINDOW VALIDATION =====
+        // Convert current UTC time to user's local time
+        let local_timestamp = clock.unix_timestamp + (challenge.timezone_offset as i64);
+        
+        // Calculate seconds since midnight in local time
+        // 86400 = seconds per day
+        let seconds_since_midnight = local_timestamp.rem_euclid(86400);
+        
+        // Calculate target wake time in seconds since midnight
+        let target_seconds = (challenge.alarm_hour as i64) * 3600 + (challenge.alarm_minute as i64) * 60;
+        
+        // Calculate difference, handling wrap-around at midnight
+        let mut diff = (seconds_since_midnight - target_seconds).abs();
+        if diff > 43200 {
+            // Handle wrap-around (e.g., 23:00 vs 01:00 should be 2 hours, not 22)
+            diff = 86400 - diff;
+        }
+        
+        require!(diff <= ALARM_WINDOW_SECONDS, ErrorCode::OutsideAlarmWindow);
+        // ===== END ALARM VALIDATION =====
+
         challenge.last_wake_ts = clock.unix_timestamp;
-        challenge.streak += 1;
+        challenge.streak = challenge.streak.checked_add(1).unwrap();
 
         if challenge.streak == 21 {
-            // payout stake + bonus
-            let bonus = (challenge.stake_amount as f64 * 0.069) as u64;
-            let total_payout = challenge.stake_amount + bonus;
+            // Calculate bonus using integer math: 6.9% = 690 basis points
+            let bonus = challenge
+                .stake_amount
+                .checked_mul(COMMISSION_BPS)
+                .unwrap()
+                .checked_div(BPS_DENOMINATOR)
+                .unwrap();
+
+            // Check treasury has enough for bonus
+            let treasury_balance = ctx.accounts.treasury.to_account_info().lamports();
+            let treasury_rent = Rent::get()?.minimum_balance(ctx.accounts.treasury.to_account_info().data_len());
+            let available = treasury_balance.saturating_sub(treasury_rent);
+            
+            // If treasury can't cover bonus, just return stake (no bonus)
+            let actual_bonus = if available >= bonus { bonus } else { 0 };
 
             challenge.is_active = false;
 
-            // Transfer from challenge PDA (stake) + Treasury (bonus)
-            // Note: Challenge PDA holds the 0.1 SOL
+            // Return stake from challenge PDA to user
             **challenge.to_account_info().try_borrow_mut_lamports()? -= challenge.stake_amount;
             **ctx.accounts.authority.to_account_info().try_borrow_mut_lamports()? += challenge.stake_amount;
 
-            // Transfer bonus from treasury (this requires treasury PDA to sign)
-            let seeds = &[b"treasury".as_ref(), &[ctx.bumps.treasury]];
-            let signer = &[&seeds[..]];
-
-            let bonus_ix = system_instruction::transfer(
-                &ctx.accounts.treasury.key(),
-                &ctx.accounts.authority.key(),
-                bonus,
-            );
-            anchor_lang::solana_program::program::invoke_signed(
-                &bonus_ix,
-                &[
-                    ctx.accounts.treasury.to_account_info(),
-                    ctx.accounts.authority.to_account_info(),
-                    ctx.accounts.system_program.to_account_info(),
-                ],
-                signer,
-            )?;
+            // Transfer bonus from treasury if available
+            if actual_bonus > 0 {
+                **ctx.accounts.treasury.to_account_info().try_borrow_mut_lamports()? -= actual_bonus;
+                **ctx.accounts.authority.to_account_info().try_borrow_mut_lamports()? += actual_bonus;
+            }
         }
 
         Ok(())
@@ -101,24 +162,47 @@ pub mod proof_of_wake {
         let challenge = &mut ctx.accounts.challenge;
         let clock = Clock::get()?;
 
-        // Check if deadline missed.
-        // For MVP: if more than 48 hours passed since last wake (or start)
-        let last_event = if challenge.last_wake_ts == 0 { challenge.start_ts } else { challenge.last_wake_ts };
+        require!(challenge.is_active, ErrorCode::ChallengeInactive);
+
+        // Validate dev wallet is the hardcoded address
+        require!(ctx.accounts.dev.key() == DEV_WALLET, ErrorCode::InvalidDevWallet);
+
+        // Check if deadline missed: 48 hours since last activity
+        let last_event = if challenge.last_wake_ts == 0 { 
+            challenge.start_ts 
+        } else { 
+            challenge.last_wake_ts 
+        };
         let elapsed = clock.unix_timestamp - last_event;
         
         require!(elapsed > 172800, ErrorCode::NotSlashableYet); // 48 hours
-        require!(challenge.is_active, ErrorCode::ChallengeInactive);
 
         challenge.is_active = false;
         let amount = challenge.stake_amount;
-        let dev_commission = (amount as f64 * 0.069) as u64;
-        let treasury_share = amount - dev_commission;
+        
+        // Calculate commission using integer math
+        let dev_commission = amount
+            .checked_mul(COMMISSION_BPS)
+            .unwrap()
+            .checked_div(BPS_DENOMINATOR)
+            .unwrap();
+        let treasury_share = amount.checked_sub(dev_commission).unwrap();
 
         // Transfer from challenge PDA
         **challenge.to_account_info().try_borrow_mut_lamports()? -= amount;
         **ctx.accounts.dev.to_account_info().try_borrow_mut_lamports()? += dev_commission;
         **ctx.accounts.treasury.to_account_info().try_borrow_mut_lamports()? += treasury_share;
 
+        Ok(())
+    }
+
+    pub fn close_challenge(ctx: Context<CloseChallenge>) -> Result<()> {
+        let challenge = &ctx.accounts.challenge;
+        
+        // Can only close inactive challenges
+        require!(!challenge.is_active, ErrorCode::ChallengeStillActive);
+        
+        // Rent is returned automatically via close = authority constraint
         Ok(())
     }
 }
@@ -128,7 +212,7 @@ pub struct InitializeTreasury<'info> {
     #[account(
         init,
         payer = authority,
-        space = 8 + 32 + 8,
+        space = 8 + 32 + 8 + 1,
         seeds = [b"treasury"],
         bump
     )]
@@ -139,11 +223,20 @@ pub struct InitializeTreasury<'info> {
 }
 
 #[derive(Accounts)]
+pub struct FundTreasury<'info> {
+    #[account(mut, seeds = [b"treasury"], bump = treasury.bump)]
+    pub treasury: Account<'info, Treasury>,
+    #[account(mut)]
+    pub funder: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct StartChallenge<'info> {
     #[account(
         init,
         payer = authority,
-        space = 8 + 32 + 8 + 8 + 8 + 1 + 8 + 1 + 1,
+        space = 8 + 32 + 8 + 8 + 1 + 1 + 8 + 1 + 1 + 4 + 1, // Added 4 bytes for timezone_offset (i32)
         seeds = [b"challenge", authority.key().as_ref()],
         bump
     )]
@@ -155,9 +248,14 @@ pub struct StartChallenge<'info> {
 
 #[derive(Accounts)]
 pub struct CompleteDay<'info> {
-    #[account(mut, seeds = [b"challenge", authority.key().as_ref()], bump)]
+    #[account(
+        mut, 
+        seeds = [b"challenge", authority.key().as_ref()], 
+        bump = challenge.bump,
+        has_one = authority
+    )]
     pub challenge: Account<'info, Challenge>,
-    #[account(mut, seeds = [b"treasury"], bump)]
+    #[account(mut, seeds = [b"treasury"], bump = treasury.bump)]
     pub treasury: Account<'info, Treasury>,
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -166,19 +264,39 @@ pub struct CompleteDay<'info> {
 
 #[derive(Accounts)]
 pub struct Slash<'info> {
-    #[account(mut, seeds = [b"challenge", challenge.authority.as_ref()], bump)]
+    #[account(
+        mut, 
+        seeds = [b"challenge", challenge.authority.as_ref()], 
+        bump = challenge.bump
+    )]
     pub challenge: Account<'info, Challenge>,
-    #[account(mut, seeds = [b"treasury"], bump)]
+    #[account(mut, seeds = [b"treasury"], bump = treasury.bump)]
     pub treasury: Account<'info, Treasury>,
-    #[account(mut)]
-    pub dev: SystemAccount<'info>,
+    /// CHECK: Validated against hardcoded DEV_WALLET constant
+    #[account(mut, address = DEV_WALLET)]
+    pub dev: AccountInfo<'info>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct CloseChallenge<'info> {
+    #[account(
+        mut,
+        seeds = [b"challenge", authority.key().as_ref()],
+        bump = challenge.bump,
+        has_one = authority,
+        close = authority
+    )]
+    pub challenge: Account<'info, Challenge>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
 }
 
 #[account]
 pub struct Treasury {
     pub authority: Pubkey,
     pub total_funded: u64,
+    pub bump: u8,
 }
 
 #[account]
@@ -191,6 +309,8 @@ pub struct Challenge {
     pub stake_amount: u64,
     pub alarm_hour: u8,
     pub alarm_minute: u8,
+    pub timezone_offset: i32,  // User's timezone offset in seconds from UTC
+    pub bump: u8,
 }
 
 #[error_code]
@@ -201,4 +321,14 @@ pub enum ErrorCode {
     TooEarly,
     #[msg("The user hasn't missed the deadline yet.")]
     NotSlashableYet,
+    #[msg("Invalid alarm time.")]
+    InvalidAlarmTime,
+    #[msg("Invalid dev wallet address.")]
+    InvalidDevWallet,
+    #[msg("Challenge is still active.")]
+    ChallengeStillActive,
+    #[msg("Current time is outside the alarm window (±1 hour).")]
+    OutsideAlarmWindow,
+    #[msg("Invalid timezone offset.")]
+    InvalidTimezone,
 }
