@@ -5,9 +5,11 @@ import { expect } from "chai";
 
 describe("proof-of-wake", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
-
-  const program = anchor.workspace.ProofOfWake as Program<ProofOfWake>;
   const provider = anchor.getProvider();
+
+  const idl = JSON.parse(require("fs").readFileSync("/home/ubuntu/.openclaw/workspace/pow-monorepo/program/target/idl/proof_of_wake.json", "utf8"));
+  const programId = new anchor.web3.PublicKey("3XY5vp1p4Q9fCeCwQNz3yMikYZhoXFJDDmEp6dBXMpx4");
+  const program = new anchor.Program(idl, programId, provider) as Program<ProofOfWake>;
   const connection = provider.connection;
   const authority = (provider as anchor.AnchorProvider).wallet.publicKey;
 
