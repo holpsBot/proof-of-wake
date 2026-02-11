@@ -163,7 +163,7 @@ pub mod proof_of_wake {
                 
                 // Update treasury accounting
                 let treasury = &mut ctx.accounts.treasury;
-                treasury.total_funded = treasury.total_funded.saturating_sub(actual_bonus);
+                treasury.total_funded = treasury.total_funded.checked_sub(actual_bonus).unwrap();
             }
         }
 
@@ -205,6 +205,10 @@ pub mod proof_of_wake {
         **ctx.accounts.dev.to_account_info().try_borrow_mut_lamports()? += dev_commission;
         **ctx.accounts.treasury.to_account_info().try_borrow_mut_lamports()? += treasury_share;
 
+        // Update treasury accounting
+        let treasury = &mut ctx.accounts.treasury;
+        treasury.total_funded = treasury.total_funded.checked_add(treasury_share).unwrap();
+
         Ok(())
     }
 
@@ -224,7 +228,7 @@ pub struct InitializeTreasury<'info> {
     #[account(
         init,
         payer = authority,
-        space = 8 + 32 + 8 + 1,
+        space = 8 + Treasury::INIT_SPACE,
         seeds = [b"treasury"],
         bump
     )]
@@ -248,7 +252,7 @@ pub struct StartChallenge<'info> {
     #[account(
         init,
         payer = authority,
-        space = 8 + 32 + 8 + 8 + 1 + 1 + 8 + 1 + 1 + 4 + 1, // Added 4 bytes for timezone_offset (i32)
+        space = 8 + Challenge::INIT_SPACE,
         seeds = [b"challenge", authority.key().as_ref()],
         bump
     )]
@@ -305,6 +309,7 @@ pub struct CloseChallenge<'info> {
 }
 
 #[account]
+#[derive(InitSpace)]
 pub struct Treasury {
     pub authority: Pubkey,
     pub total_funded: u64,
@@ -312,6 +317,7 @@ pub struct Treasury {
 }
 
 #[account]
+#[derive(InitSpace)]
 pub struct Challenge {
     pub authority: Pubkey,
     pub start_ts: i64,

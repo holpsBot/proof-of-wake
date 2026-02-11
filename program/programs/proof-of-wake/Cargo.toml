@@ -8,22 +8,11 @@ edition = "2021"
 crate-type = ["cdylib", "lib"]
 name = "proof_of_wake"
 
-[features]
-default = []
-cpi = ["no-entrypoint"]
-no-entrypoint = []
-no-idl = []
-no-log-ix-name = []
-idl-build = ["anchor-lang/idl-build"]
-anchor-debug = []
-custom-heap = []
-custom-panic = []
-
-
 [dependencies]
-anchor-lang = "0.30.1"
-solana-program = "1.18.18"
-
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
+anchor-lang = { workspace = true }
+solana-program = { workspace = true }
+hashbrown = { workspace = true }
+indexmap = { workspace = true }
+blake3 = { workspace = true }
+getrandom = { workspace = true }
+jobserver = { workspace = true }

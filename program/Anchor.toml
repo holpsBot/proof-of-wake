@@ -13,7 +13,7 @@ url = "https://api.apr.dev"
 
 [provider]
 cluster = "devnet"
-wallet = "~/.config/solana/id.json"
+wallet = "/home/ubuntu/.openclaw/workspace/deployment-wallet.json"
 
 [scripts]
 test = "npm run test"
