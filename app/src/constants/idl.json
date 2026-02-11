@@ -1,0 +1,285 @@
+{
+  "version": "0.1.0",
+  "name": "proof_of_wake",
+  "instructions": [
+    {
+      "name": "initializeTreasury",
+      "accounts": [
+        {
+          "name": "treasury",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "authority",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "fundTreasury",
+      "accounts": [
+        {
+          "name": "treasury",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "funder",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "startChallenge",
+      "accounts": [
+        {
+          "name": "challenge",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "authority",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "alarmHour",
+          "type": "u8"
+        },
+        {
+          "name": "alarmMinute",
+          "type": "u8"
+        },
+        {
+          "name": "timezoneOffsetSeconds",
+          "type": "i32"
+        },
+        {
+          "name": "stakeAmount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "completeDay",
+      "accounts": [
+        {
+          "name": "challenge",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "treasury",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "authority",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "slash",
+      "accounts": [
+        {
+          "name": "challenge",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "treasury",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "dev",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "closeChallenge",
+      "accounts": [
+        {
+          "name": "challenge",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "authority",
+          "isMut": true,
+          "isSigner": true
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Treasury",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "publicKey"
+          },
+          {
+            "name": "totalFunded",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Challenge",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "publicKey"
+          },
+          {
+            "name": "startTs",
+            "type": "i64"
+          },
+          {
+            "name": "lastWakeTs",
+            "type": "i64"
+          },
+          {
+            "name": "streak",
+            "type": "u8"
+          },
+          {
+            "name": "isActive",
+            "type": "bool"
+          },
+          {
+            "name": "stakeAmount",
+            "type": "u64"
+          },
+          {
+            "name": "alarmHour",
+            "type": "u8"
+          },
+          {
+            "name": "alarmMinute",
+            "type": "u8"
+          },
+          {
+            "name": "timezoneOffset",
+            "type": "i32"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "ChallengeInactive",
+      "msg": "Challenge is not active."
+    },
+    {
+      "code": 6001,
+      "name": "TooEarly",
+      "msg": "Too early to complete the next day."
+    },
+    {
+      "code": 6002,
+      "name": "NotSlashableYet",
+      "msg": "The user hasn't missed the deadline yet."
+    },
+    {
+      "code": 6003,
+      "name": "InvalidAlarmTime",
+      "msg": "Invalid alarm time."
+    },
+    {
+      "code": 6004,
+      "name": "InvalidDevWallet",
+      "msg": "Invalid dev wallet address."
+    },
+    {
+      "code": 6005,
+      "name": "ChallengeStillActive",
+      "msg": "Challenge is still active."
+    },
+    {
+      "code": 6006,
+      "name": "OutsideAlarmWindow",
+      "msg": "Current time is outside the alarm window (±1 hour)."
+    },
+    {
+      "code": 6007,
+      "name": "InvalidTimezone",
+      "msg": "Invalid timezone offset."
+    },
+    {
+      "code": 6008,
+      "name": "StakeTooLow",
+      "msg": "Stake amount is below minimum (0.01 SOL)."
+    },
+    {
+      "code": 6009,
+      "name": "StakeTooHigh",
+      "msg": "Stake amount is above maximum (1 SOL)."
+    }
+  ],
+  "metadata": {
+    "address": "3XY5vp1p4Q9fCeCwQNz3yMikYZhoXFJDDmEp6dBXMpx4"
+  },
+  "address": "3XY5vp1p4Q9fCeCwQNz3yMikYZhoXFJDDmEp6dBXMpx4"
+}
