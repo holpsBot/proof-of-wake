@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::system_instruction;
 
-declare_id!("2KhoiLTRRzVn4EoEcbHgdtoU4PNJrTxydTb2Mpm1VJbD");
+declare_id!("3XY5vp1p4Q9fCeCwQNz3yMikYZhoXFJDDmEp6dBXMpx4");
 
 // Hardcoded dev wallet for slash commissions
 const DEV_WALLET: Pubkey = solana_program::pubkey!("HUvXWZcteeatc6LRCn35yCH3kxetq3JcEcD923avQ37Y");
